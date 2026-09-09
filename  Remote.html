@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111111" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <title>Q70 Remote</title>
+  <style>
+    :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body {
+      margin: 0; background: #111; color: #fff;
+      min-height: 100vh; display: flex; justify-content: center;
+    }
+    .app { width: min(430px, 100%); padding: 18px 16px 32px; box-sizing: border-box; }
+    h1 { font-size: 24px; margin: 8px 0 16px; }
+    .card { background: #1d1d1f; border-radius: 18px; padding: 14px; margin-bottom: 14px; }
+    .row { display: flex; gap: 10px; align-items: center; }
+    input {
+      width: 100%; box-sizing: border-box; padding: 12px 14px;
+      border-radius: 12px; border: 1px solid #444; background: #111; color: #fff;
+      font-size: 16px;
+    }
+    button {
+      border: 0; border-radius: 14px; padding: 14px;
+      background: #2c2c2e; color: #fff; font-size: 17px; font-weight: 600;
+      touch-action: manipulation;
+    }
+    button:active { transform: scale(.97); }
+    .primary { background: #0a84ff; }
+    .danger { background: #bf2c2c; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .pad { display: grid; grid-template-columns: repeat(3, 76px); gap: 8px; justify-content: center; margin: 12px 0; }
+    .pad button { height: 64px; }
+    .spacer { visibility: hidden; }
+    .status { font-size: 14px; opacity: .8; margin-top: 10px; }
+    .small { font-size: 13px; opacity: .75; line-height: 1.4; }
+  </style>
+</head>
+<body>
+<div class="app">
+  <h1>Samsung Q70 Remote</h1>
+
+  <div class="card">
+    <input id="ip" placeholder="TV-IP, z. B. 192.168.178.45" inputmode="decimal" />
+    <div class="row" style="margin-top:10px">
+      <button class="primary" style="flex:1" onclick="connectTV()">Verbinden</button>
+      <button style="flex:1" onclick="disconnectTV()">Trennen</button>
+    </div>
+    <div id="status" class="status">Nicht verbunden</div>
+    <p class="small">iPhone und TV müssen im selben WLAN sein. Beim ersten Verbinden die Anfrage am Fernseher zulassen.</p>
+  </div>
+
+  <div class="grid3">
+    <button class="danger" onclick="sendKey('KEY_POWER')">⏻</button>
+    <button onclick="sendKey('KEY_HOME')">⌂</button>
+    <button onclick="sendKey('KEY_SOURCE')">Quelle</button>
+  </div>
+
+  <div class="card">
+    <div class="pad">
+      <button class="spacer"></button>
+      <button onclick="sendKey('KEY_UP')">▲</button>
+      <button class="spacer"></button>
+      <button onclick="sendKey('KEY_LEFT')">◀</button>
+      <button onclick="sendKey('KEY_ENTER')">OK</button>
+      <button onclick="sendKey('KEY_RIGHT')">▶</button>
+      <button class="spacer"></button>
+      <button onclick="sendKey('KEY_DOWN')">▼</button>
+      <button class="spacer"></button>
+    </div>
+    <div class="grid3">
+      <button onclick="sendKey('KEY_RETURN')">Zurück</button>
+      <button onclick="sendKey('KEY_INFO')">Info</button>
+      <button onclick="sendKey('KEY_MENU')">Menü</button>
+    </div>
+  </div>
+
+  <div class="grid3">
+    <button onclick="sendKey('KEY_VOLUP')">Vol +</button>
+    <button onclick="sendKey('KEY_MUTE')">Mute</button>
+    <button onclick="sendKey('KEY_CHUP')">CH +</button>
+    <button onclick="sendKey('KEY_VOLDOWN')">Vol −</button>
+    <button onclick="sendKey('KEY_PLAYPAUSE')">▶︎/❚❚</button>
+    <button onclick="sendKey('KEY_CHDOWN')">CH −</button>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <p class="small">
+      Hinweis: Safari kann direkte lokale WebSocket-Verbindungen zu manchen Samsung-TVs blockieren
+      oder bei selbstsignierten Zertifikaten Probleme machen. Falls das bei deinem Q70C passiert,
+      braucht die Web-App einen kleinen lokalen Vermittler im Heimnetz.
+    </p>
+  </div>
+</div>
+
+<script>
+let ws = null;
+
+const ipInput = document.getElementById("ip");
+const statusEl = document.getElementById("status");
+ipInput.value = localStorage.getItem("q70_ip") || "";
+
+function setStatus(text) { statusEl.textContent = text; }
+
+function connectTV() {
+  const ip = ipInput.value.trim();
+  if (!ip) { setStatus("Bitte TV-IP eingeben"); return; }
+  localStorage.setItem("q70_ip", ip);
+
+  if (ws) try { ws.close(); } catch(e) {}
+
+  const name = btoa(unescape(encodeURIComponent("Q70 Remote iPhone")));
+  const token = localStorage.getItem("q70_token");
+  let url = `wss://${ip}:8002/api/v2/channels/samsung.remote.control?name=${encodeURIComponent(name)}`;
+  if (token) url += `&token=${encodeURIComponent(token)}`;
+
+  setStatus("Verbinde …");
+  try {
+    ws = new WebSocket(url);
+  } catch (e) {
+    setStatus("Verbindung konnte nicht gestartet werden");
+    return;
+  }
+
+  ws.onopen = () => setStatus("Verbindung geöffnet – ggf. am TV bestätigen");
+  ws.onclose = () => setStatus("Verbindung getrennt");
+  ws.onerror = () => setStatus("Safari/TV hat die Verbindung blockiert");
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.event === "ms.channel.connect") {
+        const token = msg.data && msg.data.token;
+        if (token) localStorage.setItem("q70_token", token);
+        setStatus("Verbunden");
+      } else if (msg.event === "ms.channel.unauthorized") {
+        setStatus("Am TV bitte Verbindung erlauben");
+      }
+    } catch (e) {}
+  };
+}
+
+function disconnectTV() {
+  if (ws) {
+    try { ws.close(); } catch(e) {}
+    ws = null;
+  }
+  setStatus("Nicht verbunden");
+}
+
+function sendKey(key) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    setStatus("Nicht verbunden");
+    return;
+  }
+  const payload = {
+    method: "ms.remote.control",
+    params: {
+      Cmd: "Click",
+      DataOfCmd: key,
+      Option: "false",
+      TypeOfRemote: "SendRemoteKey"
+    }
+  };
+  ws.send(JSON.stringify(payload));
+}
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+}
+</script>
+</body>
+</html>
